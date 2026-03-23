@@ -14,24 +14,48 @@
 
 set -euo pipefail
 
-# ── Defaults ──────────────────────────────────────────────────────────────────
-NETID="${MISHA_NETID:-lyz6}"
-PARTITION="devel"
-TIME="6:00:00"
-MEM="10G"
-CPUS=1
-REMOTE_DIR="~"
+# ── Load config from config.yml ───────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONFIG_FILE="${SCRIPT_DIR}/../config.yml"
+
+# Simple YAML reader — extracts "key: value" lines (no nested structures)
+read_config() {
+    local key="$1" default="$2"
+    local val
+    val=$(grep "^${key}:" "$CONFIG_FILE" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | sed 's/[[:space:]]*#.*//' | xargs)
+    if [[ -n "$val" ]]; then echo "$val"; else echo "$default"; fi
+}
+
+NETID="$(read_config netid lyz6)"
+PARTITION="$(read_config partition devel)"
+HOURS="$(read_config hours 2)"
+TIME="${HOURS}:00:00"
+MEM="$(read_config memory_per_cpu_gib 64)G"
+CPUS="$(read_config cpus_per_task 1)"
+REMOTE_DIR="$(read_config working_directory '~')"
+RESERVATION="$(read_config reservation '')"
+CUSTOM_COMMAND="$(read_config custom_command '')"
+ADDITIONAL_MODULES="$(read_config additional_modules '')"
 POLL_INTERVAL=5
 LOGIN_NODE="misha.ycrc.yale.edu"
+
+# ── SSH multiplexing (single passphrase prompt) ──────────────────────────────
+SSH_SOCKET="/tmp/misha-ssh-$$"
+SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ControlMaster=auto -o "ControlPath=${SSH_SOCKET}" -o ControlPersist=600)
+
+cleanup() {
+    ssh -o "ControlPath=${SSH_SOCKET}" -O exit "${SSH_TARGET}" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --netid)   NETID="$2";      shift 2 ;;
-        --time)    TIME="$2";       shift 2 ;;
-        --mem)     MEM="$2";        shift 2 ;;
-        --cpus)    CPUS="$2";       shift 2 ;;
-        --dir)     REMOTE_DIR="$2"; shift 2 ;;
+        --netid)     NETID="$2";      shift 2 ;;
+        --hours)     TIME="${2}:00:00"; shift 2 ;;
+        --mem)       MEM="${2}G";     shift 2 ;;
+        --cpus)      CPUS="$2";      shift 2 ;;
+        --dir)       REMOTE_DIR="$2"; shift 2 ;;
         --partition) PARTITION="$2"; shift 2 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
@@ -43,18 +67,35 @@ fi
 
 SSH_TARGET="${NETID}@${LOGIN_NODE}"
 
-echo "==> Submitting SLURM job on ${LOGIN_NODE} (partition=${PARTITION}, time=${TIME}, mem=${MEM}, cpus=${CPUS})"
+echo "==> Submitting SLURM job on ${LOGIN_NODE} (partition=${PARTITION}, time=${TIME}, mem-per-cpu=${MEM}, cpus=${CPUS})"
 
-# ── Submit a batch job that just sleeps (holds the allocation) ────────────────
-JOB_ID=$(ssh -o StrictHostKeyChecking=accept-new "$SSH_TARGET" bash <<EOF
+# ── Build sbatch flags ───────────────────────────────────────────────────────
+SBATCH_EXTRA=""
+if [[ -n "$RESERVATION" ]]; then
+    SBATCH_EXTRA+=" --reservation=${RESERVATION}"
+fi
+
+# ── Build the wrap command (load modules + custom command + sleep) ────────────
+WRAP_CMD=""
+if [[ -n "$ADDITIONAL_MODULES" ]]; then
+    WRAP_CMD+="module load ${ADDITIONAL_MODULES}; "
+fi
+if [[ -n "$CUSTOM_COMMAND" ]]; then
+    WRAP_CMD+="${CUSTOM_COMMAND}; "
+fi
+WRAP_CMD+="sleep infinity"
+
+# ── Submit a batch job that holds the allocation ──────────────────────────────
+JOB_ID=$(ssh "${SSH_OPTS[@]}" "$SSH_TARGET" bash <<EOF
 sbatch --parsable \
     --partition=${PARTITION} \
     --time=${TIME} \
     --cpus-per-task=${CPUS} \
-    --mem=${MEM} \
+    --mem-per-cpu=${MEM} \
     --job-name=vscode-session \
     --output=/dev/null \
-    --wrap="sleep infinity"
+    ${SBATCH_EXTRA} \
+    --wrap="${WRAP_CMD}"
 EOF
 )
 
@@ -75,7 +116,7 @@ echo "==> Waiting for job to start..."
 NODE=""
 while true; do
     # Query job state and node list
-    JOB_INFO=$(ssh "$SSH_TARGET" "squeue --job ${JOB_ID} --noheader --format='%T %N'" 2>/dev/null || true)
+    JOB_INFO=$(ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "squeue --job ${JOB_ID} --noheader --format='%T %N'" 2>/dev/null || true)
 
     STATE=$(echo "$JOB_INFO" | awk '{print $1}')
     NODE=$(echo "$JOB_INFO" | awk '{print $2}')
@@ -104,37 +145,53 @@ fi
 
 echo "==> Compute node FQDN: ${COMPUTE_HOST}"
 
-# ── Configure SSH for ProxyJump through the login node ────────────────────────
-SSH_CONFIG="$HOME/.ssh/config"
-MARKER="# misha-auto-login managed block"
-
-# Remove any previous managed block
-if [[ -f "$SSH_CONFIG" ]]; then
-    sed -i.bak "/${MARKER} START/,/${MARKER} END/d" "$SSH_CONFIG"
+# ── Resolve the VSCode CLI ────────────────────────────────────────────────────
+VSCODE_CLI=""
+if command -v code &>/dev/null; then
+    VSCODE_CLI="code"
+elif [[ -x "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" ]]; then
+    VSCODE_CLI="/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
 fi
 
-cat >> "$SSH_CONFIG" <<SSHEOF
-${MARKER} START
-Host misha-login
-    HostName ${LOGIN_NODE}
-    User ${NETID}
+# ── Update SSH config so VSCode can reach the compute node via ProxyJump ──────
+SSH_CONFIG="$HOME/.ssh/config"
+SSH_HOST_ALIAS="misha-compute"
+MANAGED_START="# misha-auto-login managed block START"
+MANAGED_END="# misha-auto-login managed block END"
 
-Host misha-compute
+# Remove any existing managed block
+if grep -q "$MANAGED_START" "$SSH_CONFIG" 2>/dev/null; then
+    sed -i.bak "/${MANAGED_START}/,/${MANAGED_END}/d" "$SSH_CONFIG"
+    rm -f "${SSH_CONFIG}.bak"
+fi
+
+# Append fresh managed block
+cat >> "$SSH_CONFIG" <<SSHEOF
+${MANAGED_START}
+Host ${SSH_HOST_ALIAS}
     HostName ${COMPUTE_HOST}
     User ${NETID}
-    ProxyJump misha-login
-${MARKER} END
+    ProxyJump misha
+${MANAGED_END}
 SSHEOF
 
-echo "==> Updated ~/.ssh/config with misha-compute entry (via ProxyJump)"
+echo "==> Updated SSH config: ${SSH_HOST_ALIAS} -> ${COMPUTE_HOST}"
 
 # ── Open VSCode connected to the compute node ────────────────────────────────
-echo "==> Opening VSCode connected to ${COMPUTE_HOST}..."
+echo "==> Opening VSCode connected to ${SSH_HOST_ALIAS} (${COMPUTE_HOST})..."
 
-code --remote "ssh-remote+misha-compute" "$REMOTE_DIR" 2>/dev/null &
+if [[ -n "$VSCODE_CLI" ]]; then
+    "$VSCODE_CLI" --remote "ssh-remote+${SSH_HOST_ALIAS}" "$REMOTE_DIR" &
+else
+    echo "WARNING: 'code' CLI not found."
+    echo "  Install it from VSCode: Cmd+Shift+P -> 'Shell Command: Install code command in PATH'"
+    echo ""
+    echo "  Or open VSCode manually and connect to Remote-SSH host: ${SSH_HOST_ALIAS}"
+fi
 
 echo ""
-echo "Done! VSCode should open shortly."
+echo "Done! You can also connect manually:"
+echo "  ssh ${SSH_HOST_ALIAS}"
 echo ""
 echo "To cancel the SLURM job when you're done:"
 echo "  ssh ${SSH_TARGET} scancel ${JOB_ID}"

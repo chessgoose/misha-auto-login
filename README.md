@@ -67,3 +67,5 @@ python scripts/yale_vpn_helper.py start --wait-seconds 30
 1. connect to yale vpn via cisco anyconnect
 2. once the server is ready to be connected (browser automation/webhook), you should open a VS code server programatically with this url (it's okay if you get stuck on the part where i have to confirm via phone)
 3. connect again via duo 
+
+ssh-add --apple-use-keychain ~/.ssh/id_ed25519
