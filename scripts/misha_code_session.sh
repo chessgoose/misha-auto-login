@@ -39,9 +39,16 @@ ADDITIONAL_MODULES="$(read_config additional_modules '')"
 POLL_INTERVAL=5
 LOGIN_NODE="misha.ycrc.yale.edu"
 
+# ── Pre-load SSH key silently (empty passphrase via SSH_ASKPASS) ─────────────
+_ASKPASS=$(mktemp)
+printf '#!/bin/sh\necho ""\n' > "$_ASKPASS"
+chmod +x "$_ASKPASS"
+SSH_ASKPASS="$_ASKPASS" SSH_ASKPASS_REQUIRE=force ssh-add ~/.ssh/id_rsa </dev/null 2>/dev/null || true
+rm -f "$_ASKPASS"
+
 # ── SSH multiplexing (single passphrase prompt) ──────────────────────────────
-SSH_SOCKET="/tmp/misha-ssh-$$"
-SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ControlMaster=auto -o "ControlPath=${SSH_SOCKET}" -o ControlPersist=600)
+SSH_SOCKET="/tmp/misha-ssh-control"
+SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ControlMaster=auto -o "ControlPath=${SSH_SOCKET}" -o ControlPersist=600 -o "AddKeysToAgent=yes")
 
 cleanup() {
     ssh -o "ControlPath=${SSH_SOCKET}" -O exit "${SSH_TARGET}" 2>/dev/null || true
@@ -68,6 +75,24 @@ fi
 SSH_TARGET="${NETID}@${LOGIN_NODE}"
 
 echo "==> Submitting SLURM job on ${LOGIN_NODE} (partition=${PARTITION}, time=${TIME}, mem-per-cpu=${MEM}, cpus=${CPUS})"
+
+# ── Establish SSH master connection (auto-respond to Duo) ────────────────────
+echo "==> Authenticating (Duo push will be sent automatically)..."
+SSH_CMD="ssh ${SSH_OPTS[*]} -N -f ${SSH_TARGET}"
+expect <<EXPECT_EOF
+    set timeout 60
+    spawn {*}${SSH_CMD}
+    expect {
+        "Passcode or option*" { send "1\r"; exp_continue }
+        "Duo two-factor*"     { exp_continue }
+        timeout               { puts "ERROR: SSH auth timed out"; exit 1 }
+        eof
+    }
+EXPECT_EOF
+[[ $? -eq 0 ]] || { echo "ERROR: Failed to establish SSH connection." >&2; exit 1; }
+
+# Wait briefly for the control socket to be ready
+sleep 1
 
 # ── Build sbatch flags ───────────────────────────────────────────────────────
 SBATCH_EXTRA=""
@@ -168,6 +193,13 @@ fi
 # Append fresh managed block
 cat >> "$SSH_CONFIG" <<SSHEOF
 ${MANAGED_START}
+Host misha
+    HostName ${LOGIN_NODE}
+    User ${NETID}
+    ControlPath ${SSH_SOCKET}
+    ControlMaster auto
+    ControlPersist 600
+
 Host ${SSH_HOST_ALIAS}
     HostName ${COMPUTE_HOST}
     User ${NETID}
