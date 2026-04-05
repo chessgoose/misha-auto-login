@@ -1,71 +1,79 @@
 # misha-auto-login
 
-This repo now contains a small Python helper for Yale VPN setup tasks. This should be helpful for conducting research in the van Dijk lab.
+One-command launcher for a VSCode Remote-SSH session on Yale's Misha HPC cluster. Handles SLURM job submission, Duo 2FA, and SSH tunneling automatically.
 
-It does **not** automate:
-- Yale username/password submission
-- Duo push, passcode, or other MFA approval
-- VPN session establishment by bypassing the supported Cisco flow
+## Prerequisites
 
-That boundary is intentional. Automating credential entry or MFA approval for `access.yale.edu` would cross into unsafe territory and may violate Yale security policy.
+- Connected to **Yale VPN** (via Cisco Secure Client)
+- SSH key uploaded to https://sshkeys.ycrc.yale.edu/
+- **VSCode** installed with the [Remote-SSH](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-ssh) extension
+- `code` CLI available in your PATH (VSCode: `Cmd+Shift+P` → "Shell Command: Install 'code' command in PATH")
 
-## Project setup
+## Setup
 
-Create and activate the local Conda environment:
+1. Clone the repo:
 
-```bash
-conda env create -p ./.conda-env -f environment.yml
-conda activate ./.conda-env
-python -m pip install --upgrade pip
-```
+   ```bash
+   git clone https://github.com/your-username/misha-auto-login.git
+   cd misha-auto-login
+   ```
+
+2. Copy the example config and fill in your values:
+
+   ```bash
+   cp config.yml.example config.yml
+   ```
+
+   Edit `config.yml` with your NetID, working directory, and resource preferences.
 
 ## Usage
 
-Check local status:
+### Start a session
 
 ```bash
-python scripts/yale_vpn_helper.py status
+./scripts/misha_code_session.sh
 ```
 
-Open the Yale VPN portal in your browser:
+This will:
+
+1. Load your SSH key into the agent (no passphrase prompt)
+2. Open an SSH connection to the Misha login node, automatically selecting Duo Push
+3. Submit a SLURM job with your configured resources
+4. Wait for the job to start running
+5. Update your `~/.ssh/config` so VSCode can reach the compute node
+6. Launch VSCode connected to the compute node — no additional Duo prompt
+
+### Cancel a session
 
 ```bash
-python scripts/yale_vpn_helper.py open-portal
+./scripts/misha_cancel.sh [JOB_ID]
 ```
 
-Launch Cisco Secure Client on macOS, if installed:
+### Configuration
+
+All options are set in `config.yml`:
+
+| Key                  | Description                          | Default  |
+|----------------------|--------------------------------------|----------|
+| `netid`              | Your Yale NetID                      | —        |
+| `working_directory`  | Remote directory to open in VSCode   | `~`      |
+| `hours`              | Job duration in hours                | `2`      |
+| `cpus_per_task`      | Number of CPUs                       | `1`      |
+| `memory_per_cpu_gib` | Memory per CPU in GiB                | `32`     |
+| `partition`          | SLURM partition                      | `devel`  |
+| `reservation`        | SLURM reservation (optional)         | —        |
+| `custom_command`     | Command to run before sleep (optional)| —       |
+| `additional_modules` | Space-separated modules to load (optional) | — |
+
+You can also override settings via CLI flags:
 
 ```bash
-python scripts/yale_vpn_helper.py launch-cisco
+./scripts/misha_code_session.sh --hours 4 --cpus 2 --mem 64 --partition day
 ```
 
-Run the practical start flow:
+## How it works
 
-```bash
-python scripts/yale_vpn_helper.py start
-```
-
-That command:
-- launches Cisco Secure Client
-- opens `https://access.yale.edu`
-- polls local macOS state for a short time and reports whether a tunnel appears active
-
-You can change the polling duration:
-
-```bash
-python scripts/yale_vpn_helper.py start --wait-seconds 30
-```
-
-## Notes
-
-- Yale VPN access currently uses Cisco Secure Client / AnyConnect plus Duo MFA.
-- Recent Yale guidance indicates the VPN login flow uses the new Duo Universal Prompt.
-- If you need deeper automation, the safe path is to check whether Yale ITS provides an officially supported CLI, API, or device-trust workflow for your account type.
-- If Conda activation is not initialized in your shell yet, run `conda init zsh` once and restart the shell.
-
-# TODO Steps:
-1. connect to yale vpn via cisco anyconnect
-2. once the server is ready to be connected (browser automation/webhook), you should open a VS code server programatically with this url (it's okay if you get stuck on the part where i have to confirm via phone)
-3. connect again via duo 
-
-ssh-add --apple-use-keychain ~/.ssh/id_ed25519
+- **SSH key handling**: Uses `SSH_ASKPASS` to feed the empty passphrase to `ssh-add` non-interactively, so the key is loaded into the agent silently.
+- **Duo automation**: Uses `expect` to automatically select option 1 (Duo Push) during SSH authentication.
+- **SSH multiplexing**: Establishes a single authenticated master connection with a persistent control socket. All subsequent SSH commands (SLURM submission, job polling) and VSCode's `ProxyJump` reuse this socket — no repeated auth.
+- **SSH config management**: Writes a managed block to `~/.ssh/config` with `Host misha` (control socket settings) and `Host misha-compute` (ProxyJump to the allocated node). The block is replaced on each run.
