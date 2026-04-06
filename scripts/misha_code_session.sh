@@ -38,8 +38,16 @@ CUSTOM_COMMAND="$(read_config custom_command '')"
 ADDITIONAL_MODULES="$(read_config additional_modules '')"
 SSH_KEY="$(read_config ssh_key_path ~/.ssh/id_ed25519)"
 AUTO_CANCEL="$(read_config auto_cancel true)"
+AUTO_VPN="$(read_config auto_vpn false)"
 POLL_INTERVAL=5
 LOGIN_NODE="misha.ycrc.yale.edu"
+
+# ── Optionally ensure VPN connectivity ───────────────────────────────────────
+if [[ "$AUTO_VPN" == "true" ]]; then
+    "${SCRIPT_DIR}/ensure_vpn.sh"
+    echo "==> Waiting for network to stabilize..."
+    sleep 5
+fi
 
 # ── Pre-load SSH key silently (empty passphrase via SSH_ASKPASS) ─────────────
 _ASKPASS=$(mktemp)

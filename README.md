@@ -1,12 +1,12 @@
 # misha-auto-login
 
-One command to go from your laptop to a VSCode session on Misha.
+One command to go from your laptop to a VS Code session with Claude Code or other agentic coding tools.
 
-Reduce the time it takes for you to start doing research, and use Claude Code and other modern dev tools locally while running code on the cluster.
+Due to the exposure risks associated with API coding tools like Claude Code, the YCRC does not formally support researchers who wish to use AI coding tools to aid in their workflow development (https://docs.ycrc.yale.edu/ai/aicodingtools/).
 
 ## Prerequisites
 
-- Connected to **Yale VPN** (via Cisco Secure Client)
+- Cisco AnyConnect VPN + Mac for the ensure VPN. If you are using a different stack for connecting to Yale VPN remotely, you should just do it manually anyway to get the connection.
 - SSH key with an **empty passphrase**, uploaded to https://sshkeys.ycrc.yale.edu/ (see [YCRC SSH docs](https://docs.ycrc.yale.edu/clusters-at-yale/access/ssh/))
 - **Duo Mobile** app installed on your phone and enrolled for Yale 2FA (the script auto-sends a Duo Push)
 - **VSCode** installed with the [Remote-SSH](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-ssh) extension
