@@ -10,6 +10,8 @@ hours: 2
 cpus_per_task: 1
 memory_per_cpu_gib: 32
 partition: devel
+ssh_key_path: ~/.ssh/id_ed25519   # path to your SSH private key (e.g. ~/.ssh/id_rsa for older keys)
 reservation:          # optional
 custom_command:       # optional
 additional_modules:   # optional, space-separated module names
+auto_cancel: true     # cancel SLURM job when VSCode window is closed

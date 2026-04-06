@@ -1,11 +1,14 @@
 # misha-auto-login
 
-One-command launcher for a VSCode Remote-SSH session on Yale's Misha HPC cluster. Handles SLURM job submission, Duo 2FA, and SSH tunneling automatically.
+One command to go from your laptop to a VSCode session on Misha.
+
+Reduce the time it takes for you to start doing research, and use Claude Code and other modern dev tools locally while running code on the cluster.
 
 ## Prerequisites
 
 - Connected to **Yale VPN** (via Cisco Secure Client)
-- SSH key uploaded to https://sshkeys.ycrc.yale.edu/
+- SSH key with an **empty passphrase**, uploaded to https://sshkeys.ycrc.yale.edu/ (see [YCRC SSH docs](https://docs.ycrc.yale.edu/clusters-at-yale/access/ssh/))
+- **Duo Mobile** app installed on your phone and enrolled for Yale 2FA (the script auto-sends a Duo Push)
 - **VSCode** installed with the [Remote-SSH](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-ssh) extension
 - `code` CLI available in your PATH (VSCode: `Cmd+Shift+P` → "Shell Command: Install 'code' command in PATH")
 
@@ -56,6 +59,7 @@ All options are set in `config.yml`:
 | Key                  | Description                          | Default  |
 |----------------------|--------------------------------------|----------|
 | `netid`              | Your Yale NetID                      | —        |
+| `ssh_key_path`       | Path to your SSH private key         | `~/.ssh/id_ed25519` |
 | `working_directory`  | Remote directory to open in VSCode   | `~`      |
 | `hours`              | Job duration in hours                | `2`      |
 | `cpus_per_task`      | Number of CPUs                       | `1`      |
@@ -64,6 +68,7 @@ All options are set in `config.yml`:
 | `reservation`        | SLURM reservation (optional)         | —        |
 | `custom_command`     | Command to run before sleep (optional)| —       |
 | `additional_modules` | Space-separated modules to load (optional) | — |
+| `auto_cancel`        | Cancel SLURM job when VSCode window closes | `true` |
 
 You can also override settings via CLI flags:
 

@@ -36,6 +36,8 @@ REMOTE_DIR="$(read_config working_directory '~')"
 RESERVATION="$(read_config reservation '')"
 CUSTOM_COMMAND="$(read_config custom_command '')"
 ADDITIONAL_MODULES="$(read_config additional_modules '')"
+SSH_KEY="$(read_config ssh_key_path ~/.ssh/id_ed25519)"
+AUTO_CANCEL="$(read_config auto_cancel true)"
 POLL_INTERVAL=5
 LOGIN_NODE="misha.ycrc.yale.edu"
 
@@ -43,7 +45,7 @@ LOGIN_NODE="misha.ycrc.yale.edu"
 _ASKPASS=$(mktemp)
 printf '#!/bin/sh\necho ""\n' > "$_ASKPASS"
 chmod +x "$_ASKPASS"
-SSH_ASKPASS="$_ASKPASS" SSH_ASKPASS_REQUIRE=force ssh-add ~/.ssh/id_rsa </dev/null 2>/dev/null || true
+SSH_ASKPASS="$_ASKPASS" SSH_ASKPASS_REQUIRE=force ssh-add "${SSH_KEY}" </dev/null 2>/dev/null || true
 rm -f "$_ASKPASS"
 
 # ── SSH multiplexing (single passphrase prompt) ──────────────────────────────
@@ -213,19 +215,26 @@ echo "==> Updated SSH config: ${SSH_HOST_ALIAS} -> ${COMPUTE_HOST}"
 echo "==> Opening VSCode connected to ${SSH_HOST_ALIAS} (${COMPUTE_HOST})..."
 
 if [[ -n "$VSCODE_CLI" ]]; then
-    "$VSCODE_CLI" --remote "ssh-remote+${SSH_HOST_ALIAS}" "$REMOTE_DIR" &
+    if [[ "$AUTO_CANCEL" == "true" ]]; then
+        "$VSCODE_CLI" --wait --remote "ssh-remote+${SSH_HOST_ALIAS}" "$REMOTE_DIR"
+        echo ""
+        echo "==> VSCode window closed. Cancelling SLURM job ${JOB_ID}..."
+        ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "scancel ${JOB_ID}" 2>/dev/null || true
+        echo "==> Job ${JOB_ID} cancelled."
+    else
+        "$VSCODE_CLI" --remote "ssh-remote+${SSH_HOST_ALIAS}" "$REMOTE_DIR" &
+        echo ""
+        echo "Done! You can also connect manually:"
+        echo "  ssh ${SSH_HOST_ALIAS}"
+        echo ""
+        echo "To cancel the SLURM job when you're done:"
+        echo "  ssh ${SSH_TARGET} scancel ${JOB_ID}"
+        echo ""
+        echo "Or run:  ./scripts/misha_cancel.sh ${JOB_ID}"
+    fi
 else
     echo "WARNING: 'code' CLI not found."
     echo "  Install it from VSCode: Cmd+Shift+P -> 'Shell Command: Install code command in PATH'"
     echo ""
     echo "  Or open VSCode manually and connect to Remote-SSH host: ${SSH_HOST_ALIAS}"
 fi
-
-echo ""
-echo "Done! You can also connect manually:"
-echo "  ssh ${SSH_HOST_ALIAS}"
-echo ""
-echo "To cancel the SLURM job when you're done:"
-echo "  ssh ${SSH_TARGET} scancel ${JOB_ID}"
-echo ""
-echo "Or run:  ./scripts/misha_cancel.sh ${JOB_ID}"
