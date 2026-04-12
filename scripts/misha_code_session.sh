@@ -93,6 +93,7 @@ expect <<EXPECT_EOF
     set timeout 60
     spawn {*}${SSH_CMD}
     expect {
+        "Enter passphrase*"   { send "\r"; exp_continue }
         "Passcode or option*" { send "1\r"; exp_continue }
         "Duo two-factor*"     { exp_continue }
         timeout               { puts "ERROR: SSH auth timed out"; exit 1 }
